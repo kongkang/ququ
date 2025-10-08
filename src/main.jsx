@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client'
 import App from './App.jsx'
 import './index.css'
 import { Toaster } from './components/ui/sonner'
+import { initializeTheme } from './utils/themeManager'
 
 // 检查是否在Electron环境中
 const isElectron = () => {
@@ -96,7 +97,7 @@ class ErrorBoundary extends React.Component {
 }
 
 // 应用初始化
-function initializeApp() {
+async function initializeApp() {
   // 检查Electron API是否可用
   if (!isElectron()) {
     console.warn('Electron API不可用，某些功能可能无法正常工作')
@@ -135,36 +136,34 @@ function initializeApp() {
 
   // 设置中文语言环境
   document.documentElement.lang = 'zh-CN'
-  
-  // 添加系统主题检测
-  if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
-    document.documentElement.classList.add('dark')
-  }
 
-  // 监听系统主题变化
-  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
-    if (e.matches) {
-      document.documentElement.classList.add('dark')
-    } else {
-      document.documentElement.classList.remove('dark')
-    }
-  })
+  // 初始化主题
+  await initializeTheme()
 }
 
-// 初始化应用
-initializeApp()
+let root = null
 
-// 渲染应用
-const root = ReactDOM.createRoot(document.getElementById('root'))
+async function bootstrap() {
+  try {
+    await initializeApp()
+  } catch (error) {
+    console.error('应用初始化失败:', error)
+  }
 
-root.render(
-  <React.StrictMode>
-    <ErrorBoundary>
-      <App />
-      <Toaster />
-    </ErrorBoundary>
-  </React.StrictMode>
-)
+  root = ReactDOM.createRoot(document.getElementById('root'))
+
+  root.render(
+    <React.StrictMode>
+      <ErrorBoundary>
+        <App />
+        <Toaster />
+      </ErrorBoundary>
+    </React.StrictMode>
+  )
+}
+
+// 初始化应用并渲染
+bootstrap()
 
 // 开发环境下的热重载支持
 if (process.env.NODE_ENV === 'development') {

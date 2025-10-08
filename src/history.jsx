@@ -2,6 +2,7 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import "./index.css";
 import HistoryModal from "./components/ui/history-modal";
+import { initializeTheme } from "./utils/themeManager";
 
 // 历史记录页面组件
 const HistoryPage = () => {
@@ -265,5 +266,14 @@ const HistoryContent = ({ onCopy }) => {
 
 // 渲染应用
 const container = document.getElementById('history-root');
-const root = createRoot(container);
-root.render(<HistoryPage />);
+
+if (container) {
+  initializeTheme()
+    .catch((error) => {
+      console.error('初始化主题失败:', error);
+    })
+    .finally(() => {
+      const root = createRoot(container);
+      root.render(<HistoryPage />);
+    });
+}

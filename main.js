@@ -1,4 +1,10 @@
-const { app, globalShortcut, BrowserWindow, ipcMain } = require("electron");
+const electron = require("electron");
+const app = electron.app || (electron.default && electron.default.app);
+const { globalShortcut, BrowserWindow, ipcMain } = electron;
+
+if (!app) {
+  throw new Error("Electron app 实例未初始化");
+}
 const path = require("path");
 const { spawn } = require("child_process");
 
@@ -119,7 +125,7 @@ const databaseManager = new DatabaseManager();
 const clipboardManager = new ClipboardManager(logger); // 传递logger实例
 const funasrManager = new FunASRManager(logger); // 传递logger实例
 const trayManager = new TrayManager();
-const hotkeyManager = new HotkeyManager();
+const hotkeyManager = new HotkeyManager(logger);
 
 // 初始化数据库
 const dataDirectory = environmentManager.ensureDataDirectory();

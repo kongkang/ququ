@@ -7,10 +7,17 @@ import { useWindowDrag } from "./hooks/useWindowDrag";
 import { useRecording } from "./hooks/useRecording";
 import { useTextProcessing } from "./hooks/useTextProcessing";
 import { useModelStatus } from "./hooks/useModelStatus";
-import { usePermissions } from "./hooks/usePermissions";
-import { Mic, MicOff, Settings, History, Copy, Download } from "lucide-react";
+import { Settings, History, Copy, Download, Sun, Moon, Monitor } from "lucide-react";
 import SettingsPanel from "./components/SettingsPanel";
 import { ModelDownloadProgress } from "./components/ui/model-status-indicator";
+import { initializeTheme, setThemePreference as applyThemePreference, onThemePreferenceChange, getThemePreference } from "./utils/themeManager";
+
+const THEME_ORDER = ['light', 'dark', 'system'];
+const THEME_LABELS = {
+  light: '浅色模式',
+  dark: '深色模式',
+  system: '跟随系统'
+};
 
 // 动态导入设置页面组件
 const SettingsPage = React.lazy(() => import('./settings.jsx').then(module => ({ default: module.SettingsPage })));
@@ -194,11 +201,9 @@ const TextDisplay = ({ originalText, processedText, isProcessing, onCopy, onExpo
 };
 
 export default function App() {
-  // 检查URL参数来决定渲染哪个页面
   const urlParams = new URLSearchParams(window.location.search);
   const page = urlParams.get('page');
-  
-  // 如果是设置页面，直接渲染设置组件
+
   if (page === 'settings') {
     return (
       <React.Suspense fallback={
@@ -214,15 +219,21 @@ export default function App() {
     );
   }
 
+  return <MainAppContent />;
+}
+
+function MainAppContent() {
   const [isHovered, setIsHovered] = useState(false);
   const [originalText, setOriginalText] = useState("");
   const [processedText, setProcessedText] = useState("");
-  const [showTextArea, setShowTextArea] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  
-  const { isDragging, handleMouseDown, handleMouseMove, handleMouseUp, handleClick } = useWindowDrag();
+  const [themePreference, setThemePreferenceState] = useState('system');
+  const [themeLoading, setThemeLoading] = useState(true);
+  const [isThemeUpdating, setIsThemeUpdating] = useState(false);
+
+  const { handleMouseDown, handleMouseMove, handleMouseUp, handleClick } = useWindowDrag();
   const modelStatus = useModelStatus();
-  
+
   const {
     isRecording,
     isProcessing: isRecordingProcessing,
@@ -231,12 +242,76 @@ export default function App() {
     stopRecording,
     error: recordingError
   } = useRecording();
-  
+
   const {
-    processText,
     isProcessing: isTextProcessing,
     error: textProcessingError
   } = useTextProcessing();
+
+  useEffect(() => {
+    let mounted = true;
+
+    const setupTheme = async () => {
+      try {
+        const snapshot = await initializeTheme();
+        if (!mounted) {
+          return;
+        }
+
+        const current = snapshot || getThemePreference();
+        setThemePreferenceState(current.preference);
+      } catch (error) {
+        console.error('初始化主题失败:', error);
+      } finally {
+        if (mounted) {
+          setThemeLoading(false);
+        }
+      }
+    };
+
+    setupTheme();
+
+    const unsubscribe = onThemePreferenceChange((payload) => {
+      if (!mounted || !payload) {
+        return;
+      }
+      setThemePreferenceState(payload.preference);
+    });
+
+    return () => {
+      mounted = false;
+      if (typeof unsubscribe === 'function') {
+        unsubscribe();
+      }
+    };
+  }, []);
+
+  const cycleThemePreference = useCallback(async () => {
+    if (isThemeUpdating || themeLoading) {
+      return;
+    }
+
+    const currentIndex = Math.max(THEME_ORDER.indexOf(themePreference), 0);
+    const nextPreference = THEME_ORDER[(currentIndex + 1) % THEME_ORDER.length];
+
+    setIsThemeUpdating(true);
+    try {
+      const result = await applyThemePreference(nextPreference);
+      setThemePreferenceState(result.preference);
+      toast.success('主题已切换', {
+        description: `当前：${THEME_LABELS[result.preference] || result.preference}`,
+        duration: 2000,
+      });
+    } catch (error) {
+      console.error('切换主题失败:', error);
+      toast.error('切换主题失败', {
+        description: error.message || '请稍后重试',
+        duration: 3000,
+      });
+    } finally {
+      setIsThemeUpdating(false);
+    }
+  }, [isThemeUpdating, themeLoading, themePreference]);
 
   // 防重复粘贴的引用
   const lastPasteRef = useRef({ text: '', timestamp: 0 });
@@ -246,16 +321,16 @@ export default function App() {
   const safePaste = useCallback(async (text) => {
     const now = Date.now();
     const lastPaste = lastPasteRef.current;
-    
+
     // 防重复粘贴：如果是相同文本且在防抖时间内，则跳过
     if (lastPaste.text === text && (now - lastPaste.timestamp) < PASTE_DEBOUNCE_TIME) {
       console.log("🚫 跳过重复粘贴，文本:", text.substring(0, 50) + "...");
       return;
     }
-    
+
     // 更新最后粘贴记录
     lastPasteRef.current = { text, timestamp: now };
-    
+
     console.log("🔄 safePaste 被调用，文本:", text.substring(0, 50) + "...");
     try {
       if (window.electronAPI) {
@@ -284,14 +359,12 @@ export default function App() {
       console.log("✅ 转录成功，文本:", transcriptionResult.text);
       // 立即显示FunASR识别的原始文本
       setOriginalText(transcriptionResult.text);
-      setShowTextArea(true);
-      
       // 清空之前的处理结果，等待AI优化
       setProcessedText("");
 
       // 不立即粘贴，等待AI优化完成后再粘贴
       console.log("⏳ 等待AI优化完成后再进行粘贴...");
-      
+
       // 注意：不在这里保存到数据库，由 useRecording.js 统一处理保存逻辑
 
       toast.success("🎤 语音识别完成，AI正在优化文本...");
@@ -306,12 +379,12 @@ export default function App() {
     if (optimizedResult.success && optimizedResult.enhanced_by_ai && optimizedResult.text) {
       // 显示AI优化后的文本
       setProcessedText(optimizedResult.text);
-      
+
       // 自动粘贴AI优化后的文本
       console.log("📋 准备粘贴AI优化后的文本:", optimizedResult.text);
       await safePaste(optimizedResult.text);
       console.log("✅ AI优化文本粘贴完成");
-      
+
       toast.success("🤖 AI文本优化完成并已自动粘贴！");
       console.log('AI优化文本已设置:', optimizedResult.text);
     } else {
@@ -330,13 +403,13 @@ export default function App() {
     console.log('设置回调函数');
     window.onTranscriptionComplete = handleRecordingComplete;
     window.onAIOptimizationComplete = handleAIOptimizationComplete;
-    
+
     // 验证回调函数是否正确设置
     console.log('回调函数设置完成:', {
       onTranscriptionComplete: typeof window.onTranscriptionComplete,
       onAIOptimizationComplete: typeof window.onAIOptimizationComplete
     });
-    
+
     return () => {
       console.log('清理回调函数');
       window.onTranscriptionComplete = null;
@@ -382,6 +455,7 @@ export default function App() {
         URL.revokeObjectURL(url);
       }
     } catch (error) {
+      console.error("无法导出文本文件", error);
       toast.error("无法导出文本文件");
     }
   };
@@ -391,7 +465,7 @@ export default function App() {
     try {
       // 显示开始下载的提示
       toast.info("📥 开始下载模型文件...");
-      
+
       const result = await modelStatus.downloadModels();
       if (result.success) {
         toast.success("🎉 模型下载完成，正在加载...");
@@ -405,30 +479,51 @@ export default function App() {
   }, [modelStatus]);
 
   // 切换录音状态
-  const toggleRecording = useCallback(() => {
-    // 检查模型状态
+  const ensureModelReady = useCallback(() => {
     if (modelStatus.stage === 'need_download') {
       toast.warning("📥 请先下载AI模型文件");
-      return;
+      return false;
     }
-    
+
     if (modelStatus.stage === 'downloading') {
       toast.warning("⬇️ 模型正在下载中，请稍候...");
-      return;
+      return false;
     }
-    
+
     if (modelStatus.stage === 'loading') {
       toast.warning("🤖 模型正在加载中，请稍候...");
-      return;
+      return false;
     }
-    
+
     if (modelStatus.stage === 'error') {
       toast.error(`❌ 模型错误: ${modelStatus.error}`);
-      return;
+      return false;
     }
-    
+
     if (!modelStatus.isReady) {
       toast.warning("⏳ 模型未就绪，请稍候...");
+      return false;
+    }
+
+    return true;
+  }, [modelStatus]);
+
+  const toggleRecording = useCallback((action = 'toggle') => {
+    if (action === 'stop') {
+      if (isRecording) {
+        stopRecording();
+      }
+      return;
+    }
+
+    if (!ensureModelReady()) {
+      return;
+    }
+
+    if (action === 'start') {
+      if (!isRecording && !isRecordingProcessing) {
+        startRecording();
+      }
       return;
     }
 
@@ -437,17 +532,17 @@ export default function App() {
     } else if (isRecording) {
       stopRecording();
     }
-  }, [modelStatus, isRecording, isRecordingProcessing, startRecording, stopRecording]);
+  }, [ensureModelReady, isRecording, isRecordingProcessing, startRecording, stopRecording]);
 
   // 使用热键Hook，不再使用F2双击功能
-  const { hotkey, syncRecordingState, registerHotkey } = useHotkey();
+  const { hotkey, rawHotkey, hotkeyMode, syncRecordingState, registerHotkey } = useHotkey();
 
   // 注册传统热键监听 - 只在主窗口注册，避免重复
   useEffect(() => {
     // 检查是否为控制面板窗口
     const urlParams = new URLSearchParams(window.location.search);
     const isControlPanel = urlParams.get('panel') === 'control';
-    
+
     // 只有主窗口才注册热键
     if (isControlPanel) {
       console.log('控制面板窗口，跳过热键注册');
@@ -456,12 +551,20 @@ export default function App() {
 
     const initializeHotkey = async () => {
       try {
-        // 注册默认热键 CommandOrControl+Shift+Space
-        const success = await registerHotkey('CommandOrControl+Shift+Space');
-        if (success) {
-          console.log('主窗口热键注册成功');
+        // 从设置中读取快捷键，默认为 CommandOrControl+Shift+Space
+        const savedHotkey = await window.electronAPI.getSetting('hotkey', 'CommandOrControl+Shift+Space');
+        console.log('读取到的快捷键设置:', savedHotkey);
+
+        const result = await registerHotkey(savedHotkey);
+        if (result?.success) {
+          console.log('主窗口热键注册成功:', savedHotkey);
         } else {
-          console.error('主窗口热键注册失败');
+          const errorMessage = result?.error || '未知原因';
+          console.error('主窗口热键注册失败:', errorMessage);
+          toast.error('全局快捷键注册失败', {
+            description: `无法注册 ${savedHotkey}：${errorMessage}`,
+            duration: 5000,
+          });
         }
       } catch (error) {
         console.error('主窗口热键注册异常:', error);
@@ -500,27 +603,39 @@ export default function App() {
 
   // 监听全局热键触发事件
   useEffect(() => {
-    if (window.electronAPI) {
-      // 监听传统热键触发
-      const unsubscribeHotkey = window.electronAPI.onHotkeyTriggered((event, data) => {
-        console.log('收到热键触发事件:', data);
-        console.log('当前录音状态:', isRecording, '处理状态:', isRecordingProcessing);
-        toggleRecording();
-      });
-
-      // 监听旧的toggle事件（保持兼容性）
-      const unsubscribeToggle = window.electronAPI.onToggleDictation(() => {
-        console.log('收到旧版toggle事件');
-        console.log('当前录音状态:', isRecording, '处理状态:', isRecordingProcessing);
-        toggleRecording();
-      });
-
-      return () => {
-        if (unsubscribeHotkey) unsubscribeHotkey();
-        if (unsubscribeToggle) unsubscribeToggle();
-      };
+    if (!window.electronAPI) {
+      return undefined;
     }
-  }, [toggleRecording, isRecording, isRecordingProcessing]);
+
+    const handleHotkeyPress = () => {
+      if (hotkeyMode === 'hold') {
+        toggleRecording('start');
+      } else {
+        toggleRecording();
+      }
+    };
+
+    const unsubscribeHotkey = window.electronAPI.onHotkeyTriggered(handleHotkeyPress);
+
+    const unsubscribeToggle = window.electronAPI.onToggleDictation(() => {
+      toggleRecording();
+    });
+
+    let unsubscribeRelease;
+    if (window.electronAPI.onHotkeyReleased) {
+      unsubscribeRelease = window.electronAPI.onHotkeyReleased(() => {
+        if (hotkeyMode === 'hold') {
+          toggleRecording('stop');
+        }
+      });
+    }
+
+    return () => {
+      if (typeof unsubscribeHotkey === 'function') unsubscribeHotkey();
+      if (typeof unsubscribeToggle === 'function') unsubscribeToggle();
+      if (typeof unsubscribeRelease === 'function') unsubscribeRelease();
+    };
+  }, [toggleRecording, hotkeyMode]);
 
   // 同步录音状态到热键管理器
   useEffect(() => {
@@ -564,7 +679,6 @@ export default function App() {
   };
 
   const micState = getMicState();
-  const isListening = isRecording || isRecordingProcessing;
 
   // 获取麦克风按钮属性
   const getMicButtonProps = () => {
@@ -629,6 +743,18 @@ export default function App() {
 
   const micProps = getMicButtonProps();
 
+  const ThemeIcon = themePreference === 'light' ? Sun : themePreference === 'dark' ? Moon : Monitor;
+  const themeIconClassName = themePreference === 'light'
+    ? 'text-amber-500 dark:text-amber-400'
+    : themePreference === 'dark'
+      ? 'text-indigo-500 dark:text-indigo-300'
+      : 'text-gray-700 dark:text-gray-300';
+  const themeTooltipLabel = themeLoading
+    ? '主题加载中...'
+    : `当前主题：${THEME_LABELS[themePreference] || themePreference}${isThemeUpdating ? '（切换中）' : '（点击切换）'}`;
+  const themeButtonDisabled = themeLoading || isThemeUpdating;
+  const themeButtonClassName = `p-3 rounded-xl transition-colors shadow-sm ${themeButtonDisabled ? 'cursor-not-allowed opacity-60' : 'hover:bg-white/70 dark:hover:bg-gray-700/70'}`;
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-gray-100 dark:from-gray-900 dark:to-gray-800 p-4 pb-4">
       {/* 主界面 */}
@@ -644,6 +770,16 @@ export default function App() {
             蛐蛐
           </h1>
           <div className="flex items-center space-x-3 non-draggable">
+            <Tooltip content={themeTooltipLabel} position="bottom">
+              <button
+                type="button"
+                onClick={cycleThemePreference}
+                disabled={themeButtonDisabled}
+                className={themeButtonClassName}
+              >
+                <ThemeIcon className={`w-6 h-6 ${themeIconClassName}`} />
+              </button>
+            </Tooltip>
             <Tooltip content="历史记录" position="bottom">
               <button
                 onClick={handleOpenHistory}
@@ -701,7 +837,7 @@ export default function App() {
               {/* 移除所有状态指示环，保持简洁 */}
             </button>
           </Tooltip>
-          
+
           <p className="mt-4 status-text text-gray-700 dark:text-gray-300">
             {modelStatus.stage === 'need_download' ? (
               "需要下载AI模型文件才能开始使用"
@@ -750,7 +886,11 @@ export default function App() {
 
       {/* 设置面板 */}
       {showSettings && (
-        <SettingsPanel onClose={() => setShowSettings(false)} />
+        <SettingsPanel
+          onClose={() => setShowSettings(false)}
+          rawHotkey={rawHotkey}
+          onHotkeyChange={registerHotkey}
+        />
       )}
 
     </div>

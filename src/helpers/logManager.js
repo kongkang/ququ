@@ -12,8 +12,21 @@ class LogManager {
 
   getLogDirectory() {
     // 在用户目录下创建日志文件夹
-    const userDataPath = require('electron').app.getPath('userData');
-    return path.join(userDataPath, 'logs');
+    try {
+      const electronModule = require('electron');
+      if (electronModule?.app && typeof electronModule.app.getPath === 'function') {
+        const userDataPath = electronModule.app.getPath('userData');
+        if (userDataPath) {
+          return path.join(userDataPath, 'logs');
+        }
+      }
+    } catch (error) {
+      console.error('获取Electron userData路径失败，尝试使用备选路径', error);
+    }
+
+    const fallbackUserData = process.env.ELECTRON_USER_DATA
+      || path.join(os.homedir(), 'Library', 'Application Support', 'ququ');
+    return path.join(fallbackUserData, 'logs');
   }
 
   ensureLogDirectory() {

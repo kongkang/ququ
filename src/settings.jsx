@@ -1,10 +1,11 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import ReactDOM from "react-dom/client";
 import "./index.css";
 import { toast, Toaster } from "sonner";
-import { Settings, Save, Eye, EyeOff, X, Loader2, TestTube, CheckCircle, XCircle, Mic, Shield } from "lucide-react";
+import { Settings, Save, Eye, EyeOff, X, Loader2, TestTube, CheckCircle, XCircle, Mic, Shield, Keyboard, Sun, Moon, Monitor } from "lucide-react";
 import { usePermissions } from "./hooks/usePermissions";
 import PermissionCard from "./components/ui/permission-card";
+import { initializeTheme, setThemePreference as applyThemePreference, onThemePreferenceChange, getThemePreference } from "./utils/themeManager";
 
 const SettingsPage = () => {
   const [settings, setSettings] = useState({
@@ -21,6 +22,32 @@ const SettingsPage = () => {
   const [showApiKey, setShowApiKey] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
+  const [hotkey, setHotkey] = useState('CommandOrControl+Shift+Space');
+  const [isHotkeyLoading, setIsHotkeyLoading] = useState(true);
+  const [isSavingHotkey, setIsSavingHotkey] = useState(false);
+  const [pendingHotkey, setPendingHotkey] = useState(null);
+  const [systemInfo, setSystemInfo] = useState(null);
+  const [hotkeyMode, setHotkeyMode] = useState('toggle');
+  const [isSavingHotkeyMode, setIsSavingHotkeyMode] = useState(false);
+  const [isCapturingHotkey, setIsCapturingHotkey] = useState(false);
+  const [captureDisplay, setCaptureDisplay] = useState('');
+  const hotkeyInputRef = useRef(null);
+  const captureStateRef = useRef({
+    mainKey: null,
+    mainCode: null,
+    accelerator: null,
+    modifiers: {
+      meta: false,
+      ctrl: false,
+      alt: false,
+      shift: false
+    }
+  });
+
+  const [themePreference, setThemePreferenceState] = useState('system');
+  const [systemThemeIsDark, setSystemThemeIsDark] = useState(false);
+  const [isThemeUpdating, setIsThemeUpdating] = useState(false);
+  const [pendingTheme, setPendingTheme] = useState(null);
 
   // 权限管理
   const showAlert = (alert) => {
@@ -40,6 +67,45 @@ const SettingsPage = () => {
   // 加载设置
   useEffect(() => {
     loadSettings();
+    loadHotkey();
+    loadHotkeyMode();
+    loadSystemInfo();
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+
+    const setupTheme = async () => {
+      try {
+        const snapshot = await initializeTheme();
+        if (!mounted) {
+          return;
+        }
+
+        const current = snapshot || getThemePreference();
+        setThemePreferenceState(current.preference);
+        setSystemThemeIsDark(!!current.systemPrefersDark);
+      } catch (error) {
+        console.error('初始化主题失败:', error);
+      }
+    };
+
+    setupTheme();
+
+    const unsubscribe = onThemePreferenceChange((payload) => {
+      if (!mounted || !payload) {
+        return;
+      }
+      setThemePreferenceState(payload.preference);
+      setSystemThemeIsDark(!!payload.systemPrefersDark);
+    });
+
+    return () => {
+      mounted = false;
+      if (typeof unsubscribe === 'function') {
+        unsubscribe();
+      }
+    };
   }, []);
 
   const loadSettings = async () => {
@@ -64,6 +130,454 @@ const SettingsPage = () => {
       toast.error("加载设置失败");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadHotkey = async () => {
+    try {
+      if (window.electronAPI) {
+        const savedHotkey = await window.electronAPI.getSetting('hotkey', 'CommandOrControl+Shift+Space');
+        setHotkey(savedHotkey);
+      }
+    } catch (error) {
+      console.error('加载快捷键设置失败:', error);
+      toast.error('加载快捷键失败', {
+        description: error.message,
+      });
+    } finally {
+      setIsHotkeyLoading(false);
+    }
+  };
+
+  const loadHotkeyMode = async () => {
+    try {
+      if (window.electronAPI?.getHotkeyMode) {
+        const result = await window.electronAPI.getHotkeyMode();
+        if (result?.success && result.mode) {
+          setHotkeyMode(result.mode === 'hold' ? 'hold' : 'toggle');
+          return;
+        }
+      }
+
+      if (window.electronAPI?.getSetting) {
+        const storedMode = await window.electronAPI.getSetting('hotkey_mode', 'toggle');
+        setHotkeyMode(storedMode === 'hold' ? 'hold' : 'toggle');
+      }
+    } catch (error) {
+      console.error('加载热键模式失败:', error);
+      toast.error('加载热键模式失败', {
+        description: error.message,
+      });
+    }
+  };
+
+  const loadSystemInfo = async () => {
+    try {
+      if (window.electronAPI && window.electronAPI.getSystemInfo) {
+        const info = await window.electronAPI.getSystemInfo();
+        setSystemInfo(info);
+      }
+    } catch (error) {
+      console.error('获取系统信息失败:', error);
+    }
+  };
+
+  useEffect(() => {
+    if (!window.electronAPI?.onHotkeyModeUpdated) {
+      return undefined;
+    }
+
+    const unsubscribe = window.electronAPI.onHotkeyModeUpdated((_, data) => {
+      if (data?.mode) {
+        setHotkeyMode(data.mode === 'hold' ? 'hold' : 'toggle');
+      }
+    });
+
+    return () => {
+      if (typeof unsubscribe === 'function') {
+        unsubscribe();
+      }
+    };
+  }, []);
+
+  const formatHotkeyDisplay = (key) => {
+    if (!key) {
+      return '';
+    }
+    return key
+      .replace('CommandOrControl', navigator.platform.includes('Mac') ? '⌘' : 'Ctrl')
+      .replace('Command', '⌘')
+      .replace('Control', 'Ctrl')
+      .replace('Shift', '⇧')
+      .replace('Alt', '⌥')
+      .replace('Space', '空格')
+      .replace('+', ' + ');
+  };
+
+  const handleThemePreferenceChange = async (preference) => {
+    if (!preference || preference === themePreference || isThemeUpdating) {
+      return;
+    }
+
+    setIsThemeUpdating(true);
+    setPendingTheme(preference);
+
+    try {
+      const result = await applyThemePreference(preference);
+      setThemePreferenceState(result.preference);
+      setSystemThemeIsDark(!!result.systemPrefersDark);
+
+      const descriptions = {
+        light: '已切换到浅色模式',
+        dark: '已切换到深色模式',
+        system: '已切换为跟随系统外观'
+      };
+
+      toast.success('主题已更新', {
+        description: descriptions[result.preference] || '已更新外观设置',
+        duration: 2500,
+      });
+    } catch (error) {
+      console.error('更新主题偏好失败:', error);
+      toast.error('更新主题失败', {
+        description: error.message || '请稍后重试',
+        duration: 3500,
+      });
+    } finally {
+      setIsThemeUpdating(false);
+      setPendingTheme(null);
+    }
+  };
+
+  const handleHotkeyUpdate = async (newHotkey) => {
+    if (!newHotkey || newHotkey === hotkey || isSavingHotkey) {
+      return;
+    }
+
+    setIsSavingHotkey(true);
+    setPendingHotkey(newHotkey);
+
+    try {
+      let result = null;
+
+      if (window.electronAPI && window.electronAPI.updateGlobalHotkey) {
+        result = await window.electronAPI.updateGlobalHotkey(newHotkey);
+      } else {
+        result = { success: true, simulated: true };
+      }
+
+      if (!result || !result.success) {
+        const errorMessage = result?.error || '热键注册失败，可能已被系统占用';
+        throw new Error(errorMessage);
+      }
+
+      if (window.electronAPI && window.electronAPI.setSetting) {
+        await window.electronAPI.setSetting('hotkey', newHotkey);
+      }
+
+      setHotkey(newHotkey);
+      toast.success('快捷键已更新', {
+        description: `当前快捷键: ${formatHotkeyDisplay(newHotkey)}`,
+        duration: 3000,
+      });
+    } catch (error) {
+      console.error('更新快捷键失败:', error);
+      toast.error('快捷键更新失败', {
+        description: error.message || '热键可能已被系统或其他应用占用',
+        duration: 4000,
+      });
+    } finally {
+      setIsSavingHotkey(false);
+      setPendingHotkey(null);
+    }
+  };
+
+  const resetCaptureState = useCallback(() => {
+    captureStateRef.current.mainKey = null;
+    captureStateRef.current.mainCode = null;
+    captureStateRef.current.accelerator = null;
+    captureStateRef.current.modifiers = {
+      meta: false,
+      ctrl: false,
+      alt: false,
+      shift: false
+    };
+    setCaptureDisplay('');
+  }, []);
+
+  const updateModifierState = useCallback((event, isPressed) => {
+    const modifiers = captureStateRef.current.modifiers || {};
+
+    if (event.key === 'Meta' || event.code === 'MetaLeft' || event.code === 'MetaRight') {
+      modifiers.meta = isPressed;
+    }
+    if (event.key === 'Control' || event.code === 'ControlLeft' || event.code === 'ControlRight') {
+      modifiers.ctrl = isPressed;
+    }
+    if (event.key === 'Alt' || event.code === 'AltLeft' || event.code === 'AltRight') {
+      modifiers.alt = isPressed;
+    }
+    if (event.key === 'Shift' || event.code === 'ShiftLeft' || event.code === 'ShiftRight') {
+      modifiers.shift = isPressed;
+    }
+
+    captureStateRef.current.modifiers = modifiers;
+  }, []);
+
+  const buildAcceleratorFromState = useCallback((mainKeyOverride = null) => {
+    const state = captureStateRef.current;
+    const modifiers = state.modifiers || {};
+    const key = mainKeyOverride || state.mainKey;
+
+    const parts = [];
+    if (modifiers.meta || modifiers.ctrl) {
+      parts.push('CommandOrControl');
+    }
+    if (modifiers.alt) {
+      parts.push('Alt');
+    }
+    if (modifiers.shift) {
+      parts.push('Shift');
+    }
+    if (key) {
+      parts.push(key);
+    }
+
+    return parts.join('+');
+  }, []);
+
+  const getKeyTokenFromEvent = useCallback((event) => {
+    if (!event) {
+      return null;
+    }
+
+    const modifierKeys = ['Shift', 'Control', 'Alt', 'Meta'];
+    if (modifierKeys.includes(event.key)) {
+      return null;
+    }
+
+    if (event.key === 'Dead') {
+      return null;
+    }
+
+    if (event.key === ' ') {
+      return 'Space';
+    }
+
+    if (/^F\d{1,2}$/i.test(event.key)) {
+      return event.key.toUpperCase();
+    }
+
+    const specialByKey = {
+      Backspace: 'Backspace',
+      Enter: 'Enter',
+      Tab: 'Tab',
+      Delete: 'Delete',
+      Home: 'Home',
+      End: 'End',
+      PageUp: 'PageUp',
+      PageDown: 'PageDown',
+      ArrowUp: 'ArrowUp',
+      ArrowDown: 'ArrowDown',
+      ArrowLeft: 'ArrowLeft',
+      ArrowRight: 'ArrowRight',
+    };
+
+    if (specialByKey[event.key]) {
+      return specialByKey[event.key];
+    }
+
+    const code = event.code;
+    const specialByCode = {
+      NumpadAdd: 'NumpadAdd',
+      NumpadSubtract: 'NumpadSubtract',
+      NumpadMultiply: 'NumpadMultiply',
+      NumpadDivide: 'NumpadDivide',
+      NumpadDecimal: 'NumpadDecimal',
+      NumpadEnter: 'NumpadEnter',
+      NumpadEqual: 'NumpadEqual',
+      NumpadComma: 'NumpadComma',
+      Minus: 'Minus',
+      Equal: 'Equal',
+      BracketLeft: 'BracketLeft',
+      BracketRight: 'BracketRight',
+      Backslash: 'Backslash',
+      Slash: 'Slash',
+      Period: 'Period',
+      Comma: 'Comma',
+      Semicolon: 'Semicolon',
+      Quote: 'Quote',
+      Backquote: 'Backquote'
+    };
+
+    if (specialByCode[code]) {
+      return specialByCode[code];
+    }
+
+    if (code?.startsWith('Key')) {
+      return code.slice(3).toUpperCase();
+    }
+
+    if (code?.startsWith('Digit')) {
+      return code.slice(5);
+    }
+
+    if (code?.startsWith('Numpad')) {
+      const suffix = code.slice(6);
+      if (/^[0-9]$/.test(suffix)) {
+        return `Numpad${suffix}`;
+      }
+      const mapped = specialByCode[`Numpad${suffix}`];
+      if (mapped) {
+        return mapped;
+      }
+    }
+
+    if (event.key && event.key.length === 1) {
+      return event.key.toUpperCase();
+    }
+
+    return null;
+  }, []);
+
+  const handleCaptureKeyDown = useCallback((event) => {
+    if (!isCapturingHotkey) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (event.key === 'Escape') {
+      resetCaptureState();
+      setIsCapturingHotkey(false);
+      hotkeyInputRef.current?.blur();
+      return;
+    }
+
+    updateModifierState(event, true);
+
+    if (!event.repeat) {
+      const keyToken = getKeyTokenFromEvent(event);
+      if (keyToken) {
+        captureStateRef.current.mainKey = keyToken;
+        captureStateRef.current.mainCode = event.code;
+      }
+    }
+
+    const accelerator = buildAcceleratorFromState();
+    captureStateRef.current.accelerator = accelerator;
+
+    if (accelerator) {
+      setCaptureDisplay(formatHotkeyDisplay(accelerator));
+    } else {
+      const partial = buildAcceleratorFromState(null);
+      setCaptureDisplay(partial ? formatHotkeyDisplay(partial) : '');
+    }
+  }, [isCapturingHotkey, resetCaptureState, updateModifierState, getKeyTokenFromEvent, buildAcceleratorFromState, formatHotkeyDisplay]);
+
+  const handleCaptureKeyUp = useCallback((event) => {
+    if (!isCapturingHotkey) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    const keyToken = getKeyTokenFromEvent(event);
+    const state = captureStateRef.current;
+    const isMainKey = !!state.mainKey && (
+      (keyToken && keyToken === state.mainKey) ||
+      (event.code && event.code === state.mainCode)
+    );
+
+    if (isMainKey) {
+      const accelerator = state.accelerator || buildAcceleratorFromState();
+      if (accelerator) {
+        handleHotkeyUpdate(accelerator);
+      }
+      resetCaptureState();
+      setIsCapturingHotkey(false);
+      hotkeyInputRef.current?.blur();
+      return;
+    }
+
+    updateModifierState(event, false);
+
+    if (state.mainKey) {
+      const accelerator = buildAcceleratorFromState();
+      state.accelerator = accelerator;
+      setCaptureDisplay(accelerator ? formatHotkeyDisplay(accelerator) : '');
+    } else {
+      const partial = buildAcceleratorFromState(null);
+      setCaptureDisplay(partial ? formatHotkeyDisplay(partial) : '');
+    }
+  }, [isCapturingHotkey, getKeyTokenFromEvent, buildAcceleratorFromState, handleHotkeyUpdate, resetCaptureState, updateModifierState, formatHotkeyDisplay]);
+
+  const handleCaptureFocus = useCallback(() => {
+    resetCaptureState();
+    setIsCapturingHotkey(true);
+  }, [resetCaptureState]);
+
+  const handleCaptureBlur = useCallback(() => {
+    resetCaptureState();
+    setIsCapturingHotkey(false);
+  }, [resetCaptureState]);
+
+  useEffect(() => {
+    if (!isCapturingHotkey) {
+      return undefined;
+    }
+
+    const keydownListener = (event) => handleCaptureKeyDown(event);
+    const keyupListener = (event) => handleCaptureKeyUp(event);
+
+    window.addEventListener('keydown', keydownListener, true);
+    window.addEventListener('keyup', keyupListener, true);
+
+    return () => {
+      window.removeEventListener('keydown', keydownListener, true);
+      window.removeEventListener('keyup', keyupListener, true);
+    };
+  }, [isCapturingHotkey, handleCaptureKeyDown, handleCaptureKeyUp]);
+
+  const handleHotkeyModeChange = async (mode) => {
+    if (mode === hotkeyMode || isSavingHotkeyMode) {
+      return;
+    }
+
+    setIsSavingHotkeyMode(true);
+
+    try {
+      let result = null;
+
+      if (window.electronAPI?.updateHotkeyMode) {
+        result = await window.electronAPI.updateHotkeyMode(mode);
+      } else if (window.electronAPI?.setSetting) {
+        await window.electronAPI.setSetting('hotkey_mode', mode);
+        result = { success: true };
+      } else {
+        result = { success: true, simulated: true };
+      }
+
+      if (!result || !result.success) {
+        const errorMessage = result?.error || '热键模式更新失败';
+        throw new Error(errorMessage);
+      }
+
+      setHotkeyMode(mode);
+      toast.success('快捷键模式已更新', {
+        description: mode === 'hold' ? '按住快捷键即可录音，松开后自动结束。' : '再次按下快捷键结束录音。',
+        duration: 3000,
+      });
+    } catch (error) {
+      console.error('更新快捷键模式失败:', error);
+      toast.error('更新快捷键模式失败', {
+        description: error.message || '请稍后重试',
+        duration: 4000,
+      });
+    } finally {
+      setIsSavingHotkeyMode(false);
     }
   };
 
@@ -179,6 +693,27 @@ const SettingsPage = () => {
     }
   };
 
+  const themeOptions = [
+    {
+      value: 'light',
+      title: '浅色模式',
+      description: '适合明亮环境，保持界面清爽',
+      icon: Sun
+    },
+    {
+      value: 'dark',
+      title: '深色模式',
+      description: '夜间或低光环境下更护眼',
+      icon: Moon
+    },
+    {
+      value: 'system',
+      title: '跟随系统',
+      description: '自动匹配系统的深浅色设置',
+      icon: Monitor
+    }
+  ];
+
   if (loading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-50 to-gray-100 dark:from-gray-900 dark:to-gray-800 flex items-center justify-center">
@@ -211,11 +746,237 @@ const SettingsPage = () => {
       {/* 主要内容 - 可滚动 */}
       <div className="flex-1 overflow-y-auto min-h-0">
         <div className="max-w-2xl mx-auto p-6 pb-8">
-          {/* 权限管理部分 */}
+          {/* 快捷键设置部分 */}
           <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg border border-gray-200 dark:border-gray-700 mb-6">
             <div className="p-6">
               <div className="mb-4">
-                <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 chinese-title">
+                <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 chinese-title flex items-center gap-2">
+                  <Keyboard className="w-5 h-5 text-blue-600" />
+                  快捷键设置
+                </h2>
+                <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
+                  设置开始/停止录音的全局快捷键。
+                </p>
+              </div>
+
+              <div className="bg-gray-50 dark:bg-gray-900/40 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-gray-600 dark:text-gray-400">当前快捷键</p>
+                    <p className="mt-1 text-lg font-semibold text-blue-600 dark:text-blue-300">
+                      {isHotkeyLoading ? '加载中...' : formatHotkeyDisplay(hotkey)}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="mt-4">
+                  <p className="text-xs text-gray-500 dark:text-gray-500 mb-2">自定义快捷键：</p>
+                  <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                    <input
+                      ref={hotkeyInputRef}
+                      type="text"
+                      readOnly
+                      value={isCapturingHotkey ? (captureDisplay || '等待按键...') : formatHotkeyDisplay(hotkey)}
+                      onFocus={handleCaptureFocus}
+                      onBlur={handleCaptureBlur}
+                      placeholder="点击后按下新的快捷键组合"
+                      className="flex-1 px-3 py-2 text-sm rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950/60 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                    <div className="flex gap-2">
+                      {isCapturingHotkey ? (
+                        <button
+                          type="button"
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => {
+                            handleCaptureBlur();
+                            hotkeyInputRef.current?.blur();
+                          }}
+                          className="px-3 py-2 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+                        >
+                          取消
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            resetCaptureState();
+                            hotkeyInputRef.current?.focus();
+                            handleCaptureFocus();
+                          }}
+                          className="px-3 py-2 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+                        >
+                          重新录制
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
+                    聚焦输入框后按下想要的快捷键组合，松开即自动保存。
+                  </p>
+                </div>
+
+                <div className="mt-4">
+                  <p className="text-xs text-gray-500 dark:text-gray-500 mb-2">选择预设快捷键：</p>
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+                    {[
+                      { key: 'CommandOrControl+Shift+Space', label: '⌘/Ctrl + ⇧ + 空格' },
+                      { key: 'CommandOrControl+Shift+R', label: '⌘/Ctrl + ⇧ + R' },
+                      { key: 'Alt+Space', label: '⌥ + 空格', unsupportedPlatforms: ['win32'], warning: 'Windows 系统会打开窗口菜单' },
+                      { key: 'F2', label: 'F2' },
+                      { key: 'CommandOrControl+R', label: '⌘/Ctrl + R', warning: '部分应用将此快捷键用于刷新' },
+                      { key: 'Alt+R', label: '⌥ + R' },
+                    ].map((preset) => {
+                      const isPlatformBlocked = preset.unsupportedPlatforms?.includes(systemInfo?.platform);
+                      const isActive = hotkey === preset.key;
+                      return (
+                        <button
+                          key={preset.key}
+                          onClick={() => handleHotkeyUpdate(preset.key)}
+                          disabled={isActive || isSavingHotkey || isPlatformBlocked}
+                          title={isPlatformBlocked ? preset.warning : preset.warning || undefined}
+                          className={`px-3 py-2 text-sm rounded-lg border transition-colors ${
+                            isActive
+                              ? 'bg-blue-600 text-white border-blue-600 cursor-default'
+                              : `${isPlatformBlocked ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed' : 'bg-white text-gray-700 hover:bg-blue-50 border-gray-200 dark:bg-gray-950/60 dark:text-gray-300 dark:border-gray-700 dark:hover:bg-gray-900/60'}`
+                          }`}
+                        >
+                          {isSavingHotkey && pendingHotkey === preset.key ? '保存中...' : preset.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {systemInfo?.platform === 'win32' && (
+                    <p className="text-xs text-amber-600 mt-2">
+                      提示：Windows 系统保留 Alt + 空格 用于窗口菜单，可能无法注册。
+                    </p>
+                  )}
+                  <p className="text-xs text-gray-500 dark:text-gray-500 mt-2">
+                    如果注册失败，系统会提示您更换组合。
+                  </p>
+                </div>
+
+                <div className="mt-6">
+                  <p className="text-xs text-gray-500 dark:text-gray-500 mb-2">快捷键行为模式：</p>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                    {[
+                      {
+                        value: 'toggle',
+                        title: '按下开始 / 再按结束',
+                        hint: '适合较长时间的录音'
+                      },
+                      {
+                        value: 'hold',
+                        title: '按住开始 / 松开结束',
+                        hint: '适合即时对话或按住说话'
+                      }
+                    ].map((option) => {
+                      const isActive = hotkeyMode === option.value;
+                      return (
+                        <button
+                          key={option.value}
+                          type="button"
+                          onClick={() => handleHotkeyModeChange(option.value)}
+                          disabled={isActive || isSavingHotkeyMode}
+                          className={`px-3 py-2 text-left rounded-lg border transition-colors ${
+                            isActive
+                              ? 'bg-blue-600 text-white border-blue-600 cursor-default'
+                              : 'bg-white text-gray-700 hover:bg-blue-50 border-gray-200 dark:bg-gray-950/60 dark:text-gray-300 dark:border-gray-700 dark:hover:bg-gray-900/60'
+                          }`}
+                        >
+                          <span className="block text-sm font-medium">
+                            {isSavingHotkeyMode && !isActive ? '保存中...' : option.title}
+                          </span>
+                          <span className={`block text-xs mt-1 ${isActive ? 'text-blue-100/90' : 'text-gray-500 dark:text-gray-400'}`}>
+                            {option.hint}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="text-xs text-gray-400 dark:text-gray-500 mt-2">
+                    {hotkeyMode === 'hold'
+                      ? '按住快捷键即可录音，松开后自动结束。'
+                      : '按一次开始录音，再按一次结束录音。'}
+                  </p>
+                </div>
+          </div>
+        </div>
+      </div>
+
+      {/* 外观设置部分 */}
+      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg border border-gray-200 dark:border-gray-700 mb-6">
+        <div className="p-6">
+          <div className="mb-4">
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 chinese-title flex items-center gap-2">
+              <Sun className="w-5 h-5 text-amber-500" />
+              外观主题
+            </h2>
+            <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
+              选择应用的深浅色风格，可随时切换并立即生效。
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            {themeOptions.map((option) => {
+              const Icon = option.icon;
+              const isActive = themePreference === option.value;
+              const isPending = isThemeUpdating && pendingTheme === option.value;
+
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => handleThemePreferenceChange(option.value)}
+                  disabled={isThemeUpdating && !isPending}
+                  aria-pressed={isActive}
+                  className={`flex items-start gap-3 p-4 rounded-xl border transition-all duration-200 text-left ${
+                    isActive
+                      ? 'border-blue-500 bg-blue-50/80 dark:bg-blue-900/20 dark:border-blue-500/80 shadow-sm'
+                      : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 hover:border-blue-400/60 hover:bg-blue-50/50 dark:hover:bg-blue-900/10'
+                  } ${isThemeUpdating && !isPending ? 'cursor-not-allowed opacity-70' : 'cursor-pointer'}`}
+                >
+                  <span className={`p-2 rounded-lg transition-colors ${
+                    isActive ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-200'
+                  }`}>
+                    <Icon className="w-5 h-5" />
+                  </span>
+                  <div className="flex-1">
+                    <div className="flex items-center justify-between">
+                      <p className={`text-sm font-medium ${
+                        isActive ? 'text-blue-600 dark:text-blue-300' : 'text-gray-800 dark:text-gray-200'
+                      }`}>
+                        {option.title}
+                      </p>
+                      {isActive && (
+                        <CheckCircle className="w-4 h-4 text-blue-500" />
+                      )}
+                    </div>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                      {option.description}
+                    </p>
+                    {option.value === 'system' && (
+                      <p className="text-[11px] text-blue-600 dark:text-blue-300 mt-1">
+                        当前系统主题：{systemThemeIsDark ? '深色' : '浅色'}
+                      </p>
+                    )}
+                    {isPending && (
+                      <p className="text-[11px] text-blue-500 dark:text-blue-300 mt-1">
+                        切换中...
+                      </p>
+                    )}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* 权限管理部分 */}
+      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg border border-gray-200 dark:border-gray-700 mb-6">
+        <div className="p-6">
+          <div className="mb-4">
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 chinese-title">
                   权限管理
                 </h2>
                 <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
@@ -538,7 +1299,15 @@ const SettingsPage = () => {
 export { SettingsPage };
 
 // 如果是直接访问settings.html，则渲染应用
-if (document.getElementById("settings-root")) {
-  const root = ReactDOM.createRoot(document.getElementById("settings-root"));
-  root.render(<SettingsPage />);
+const settingsRoot = document.getElementById("settings-root");
+
+if (settingsRoot) {
+  initializeTheme()
+    .catch((error) => {
+      console.error('初始化主题失败:', error);
+    })
+    .finally(() => {
+      const root = ReactDOM.createRoot(settingsRoot);
+      root.render(<SettingsPage />);
+    });
 }
