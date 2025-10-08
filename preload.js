@@ -55,11 +55,21 @@ contextBridge.exposeInMainWorld("electronAPI", {
   saveSetting: (key, value) => ipcRenderer.invoke("save-setting", key, value),
   resetSettings: () => ipcRenderer.invoke("reset-settings"),
 
+  // 主题同步
+  broadcastThemePreference: (preference) => ipcRenderer.send("theme-preference-changed", preference),
+  onThemePreferenceUpdated: (callback) => {
+    ipcRenderer.on("theme-preference-updated", callback);
+    return () => ipcRenderer.removeListener("theme-preference-updated", callback);
+  },
+
   // 热键管理
   registerHotkey: (hotkey) => ipcRenderer.invoke("register-hotkey", hotkey),
   unregisterHotkey: (hotkey) => ipcRenderer.invoke("unregister-hotkey", hotkey),
   getCurrentHotkey: () => ipcRenderer.invoke("get-current-hotkey"),
-  
+  updateGlobalHotkey: (hotkey) => ipcRenderer.invoke("update-global-hotkey", hotkey),
+  getHotkeyMode: () => ipcRenderer.invoke("get-hotkey-mode"),
+  updateHotkeyMode: (mode) => ipcRenderer.invoke("update-hotkey-mode", mode),
+
   // F2热键管理
   registerF2Hotkey: () => ipcRenderer.invoke("register-f2-hotkey"),
   unregisterF2Hotkey: () => ipcRenderer.invoke("unregister-f2-hotkey"),
@@ -76,6 +86,18 @@ contextBridge.exposeInMainWorld("electronAPI", {
   onHotkeyTriggered: (callback) => {
     ipcRenderer.on("hotkey-triggered", callback);
     return () => ipcRenderer.removeListener("hotkey-triggered", callback);
+  },
+  onHotkeyUpdated: (callback) => {
+    ipcRenderer.on("hotkey-updated", callback);
+    return () => ipcRenderer.removeListener("hotkey-updated", callback);
+  },
+  onHotkeyReleased: (callback) => {
+    ipcRenderer.on("hotkey-released", callback);
+    return () => ipcRenderer.removeListener("hotkey-released", callback);
+  },
+  onHotkeyModeUpdated: (callback) => {
+    ipcRenderer.on("hotkey-mode-updated", callback);
+    return () => ipcRenderer.removeListener("hotkey-mode-updated", callback);
   },
 
   // 文件操作
@@ -160,7 +182,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
 // 添加一些实用的常量
 contextBridge.exposeInMainWorld("constants", {
   APP_NAME: "蛐蛐 (QuQu)",
-  VERSION: "1.0.0",
+  VERSION: "1.0.1",
   SUPPORTED_AUDIO_FORMATS: ["wav", "mp3", "m4a", "flac"],
   SUPPORTED_EXPORT_FORMATS: ["txt", "docx", "pdf", "json"],
   DEFAULT_HOTKEY: "CommandOrControl+Shift+Space",

@@ -1,4 +1,4 @@
-const { ipcMain } = require("electron");
+const { ipcMain, BrowserWindow, nativeTheme } = require("electron");
 
 class IPCHandlers {
   constructor(managers) {
@@ -9,10 +9,30 @@ class IPCHandlers {
     this.windowManager = managers.windowManager;
     this.hotkeyManager = managers.hotkeyManager;
     this.logger = managers.logger; // 添加logger引用
-    
+
+    // 跟踪热键注册的发送者及其当前热键
+    this.hotkeyRegisteredSenders = new Map();
+    this.hotkeySenderCleanupHandlers = new Map();
+
     // 跟踪F2热键注册状态
     this.f2RegisteredSenders = new Set();
-    
+
+    this.hotkeyMode = 'toggle';
+    try {
+      if (this.databaseManager) {
+        const savedMode = this.databaseManager.getSetting('hotkey_mode', 'toggle');
+        if (savedMode === 'hold' && this.hotkeyManager && this.hotkeyManager.isHoldSupported()) {
+          this.hotkeyMode = 'hold';
+        } else if (savedMode === 'hold' && this.logger && this.logger.warn) {
+          this.logger.warn('检测到保存的热键模式为按住，但当前环境不支持，已自动降级为切换模式');
+        }
+      }
+    } catch (error) {
+      if (this.logger && this.logger.warn) {
+        this.logger.warn('读取热键模式失败，使用默认切换模式', error);
+      }
+    }
+
     this.setupHandlers();
   }
 
@@ -156,6 +176,38 @@ class IPCHandlers {
     ipcMain.handle("reset-settings", () => {
       // TODO: 实现重置设置功能
       return this.databaseManager.resetSettings();
+    });
+
+    ipcMain.on("theme-preference-changed", (event, preference) => {
+      try {
+        if (preference === 'light' || preference === 'dark' || preference === 'system') {
+          const themeSource = preference === 'system' ? 'system' : preference;
+          if (nativeTheme && typeof nativeTheme.themeSource === 'string') {
+            nativeTheme.themeSource = themeSource;
+          }
+        }
+
+        const senderId = event?.sender?.id;
+        const allWindows = BrowserWindow.getAllWindows();
+        for (const window of allWindows) {
+          if (window?.webContents?.id === senderId) {
+            continue;
+          }
+          window.webContents.send("theme-preference-updated", preference);
+        }
+
+        if (this.logger && this.logger.info) {
+          this.logger.info('主题偏好已广播到所有窗口', {
+            preference,
+            senderId,
+            windowCount: allWindows.length
+          });
+        }
+      } catch (error) {
+        if (this.logger && this.logger.error) {
+          this.logger.error('广播主题偏好失败', error);
+        }
+      }
     });
 
     // 剪贴板相关
@@ -307,45 +359,86 @@ class IPCHandlers {
     });
 
     // 热键管理 - 添加发送者跟踪机制
-    this.hotkeyRegisteredSenders = new Set(); // 跟踪已注册热键的发送者
-    
     ipcMain.handle("register-hotkey", (event, hotkey) => {
       try {
-        if (this.hotkeyManager) {
-          const senderId = event.sender.id;
-          
-          // 检查是否已经为这个发送者注册过热键
-          if (this.hotkeyRegisteredSenders.has(senderId)) {
-            this.logger.info(`发送者 ${senderId} 已注册过热键，跳过重复注册`);
-            return { success: true };
-          }
-          
-          const success = this.hotkeyManager.registerHotkey(hotkey, () => {
-            // 只发送热键触发事件到主窗口，避免重复触发
-            this.logger.info(`热键 ${hotkey} 被触发，发送事件到主窗口`);
-            if (this.windowManager && this.windowManager.mainWindow && !this.windowManager.mainWindow.isDestroyed()) {
-              this.windowManager.mainWindow.webContents.send("hotkey-triggered", { hotkey });
-            }
-          });
-          
-          if (success) {
-            // 添加发送者到跟踪列表
-            this.hotkeyRegisteredSenders.add(senderId);
-            
-            // 监听窗口关闭事件，清理注册记录
-            event.sender.on('destroyed', () => {
-              this.hotkeyRegisteredSenders.delete(senderId);
-              this.logger.info(`清理发送者 ${senderId} 的热键注册记录`);
-            });
-            
-            this.logger.info(`热键 ${hotkey} 注册成功，发送者: ${senderId}`);
-          } else {
-            this.logger.error(`热键 ${hotkey} 注册失败`);
-          }
-          
-          return { success };
+        if (!this.hotkeyManager) {
+          return { success: false, error: "热键管理器未初始化" };
         }
-        return { success: false, error: "热键管理器未初始化" };
+
+        const senderId = event.sender.id;
+        const existingHotkey = this.hotkeyRegisteredSenders.get(senderId);
+
+        if (existingHotkey === hotkey) {
+          this.logger.info(`发送者 ${senderId} 的热键 ${hotkey} 已注册，跳过重复注册`);
+          return { success: true, alreadyRegistered: true };
+        }
+
+        const registerWithCallback = (hotkeyCombo) => {
+          return this.hotkeyManager.registerHotkey(
+            hotkeyCombo,
+            () => {
+              // 只发送热键触发事件到主窗口，避免重复触发
+              this.logger.info(`热键 ${hotkeyCombo} 被触发，发送事件到主窗口`);
+              if (this.windowManager && this.windowManager.mainWindow && !this.windowManager.mainWindow.isDestroyed()) {
+                this.windowManager.mainWindow.webContents.send("hotkey-triggered", { hotkey: hotkeyCombo });
+              }
+            },
+            this.getHotkeyOptions(hotkeyCombo)
+          );
+        };
+
+        let previousHotkey = existingHotkey;
+        if (previousHotkey && previousHotkey !== hotkey) {
+          this.logger.info(`发送者 ${senderId} 更新热键: ${previousHotkey} -> ${hotkey}`);
+          this.hotkeyManager.unregisterHotkey(previousHotkey);
+          this.hotkeyRegisteredSenders.delete(senderId);
+        }
+
+        const result = registerWithCallback(hotkey);
+
+        if (result.success) {
+          this.hotkeyRegisteredSenders.set(senderId, hotkey);
+
+          if (!this.hotkeySenderCleanupHandlers.has(senderId)) {
+            const cleanup = () => {
+              const currentHotkey = this.hotkeyRegisteredSenders.get(senderId);
+              if (currentHotkey) {
+                this.hotkeyManager.unregisterHotkey(currentHotkey);
+              }
+              this.hotkeyRegisteredSenders.delete(senderId);
+              this.hotkeySenderCleanupHandlers.delete(senderId);
+              this.logger.info(`清理发送者 ${senderId} 的热键注册记录`);
+            };
+            event.sender.once('destroyed', cleanup);
+            this.hotkeySenderCleanupHandlers.set(senderId, cleanup);
+          }
+
+          this.logger.info(`热键 ${hotkey} 注册成功，发送者: ${senderId}`);
+          return result;
+        }
+
+        if (result.error) {
+          this.logger.error(`热键 ${hotkey} 注册失败: ${result.error}`);
+        } else {
+          this.logger.error(`热键 ${hotkey} 注册失败`);
+        }
+
+        if (previousHotkey && previousHotkey !== hotkey) {
+          const revertResult = registerWithCallback(previousHotkey);
+          if (revertResult.success) {
+            this.hotkeyRegisteredSenders.set(senderId, previousHotkey);
+            this.logger.warn(`已恢复发送者 ${senderId} 的热键 ${previousHotkey}`);
+          } else {
+            if (revertResult.error) {
+              this.logger.error(`尝试恢复热键 ${previousHotkey} 失败: ${revertResult.error}`);
+            } else {
+              this.logger.error(`尝试恢复热键 ${previousHotkey} 失败`);
+            }
+            this.hotkeyRegisteredSenders.delete(senderId);
+          }
+        }
+
+        return result;
       } catch (error) {
         this.logger.error("注册热键失败:", error);
         return { success: false, error: error.message };
@@ -354,13 +447,142 @@ class IPCHandlers {
 
     ipcMain.handle("unregister-hotkey", (event, hotkey) => {
       try {
-        if (this.hotkeyManager) {
-          const success = this.hotkeyManager.unregisterHotkey(hotkey);
-          return { success };
+        if (!this.hotkeyManager) {
+          return { success: false, error: "热键管理器未初始化" };
         }
-        return { success: false, error: "热键管理器未初始化" };
+
+        const senderId = event.sender.id;
+        const trackedHotkey = this.hotkeyRegisteredSenders.get(senderId);
+        const targetHotkey = hotkey || trackedHotkey;
+
+        if (!targetHotkey) {
+          return { success: false, error: "未找到可注销的热键" };
+        }
+
+        const success = this.hotkeyManager.unregisterHotkey(targetHotkey);
+
+        if (success && trackedHotkey === targetHotkey) {
+          this.hotkeyRegisteredSenders.delete(senderId);
+          const cleanup = this.hotkeySenderCleanupHandlers.get(senderId);
+          if (cleanup) {
+            event.sender.removeListener('destroyed', cleanup);
+            this.hotkeySenderCleanupHandlers.delete(senderId);
+          }
+        }
+
+        if (!success) {
+          return { success: false, error: `热键 ${targetHotkey} 未注册` };
+        }
+
+        return { success: true };
       } catch (error) {
         this.logger.error("注销热键失败:", error);
+        return { success: false, error: error.message };
+      }
+    });
+
+    ipcMain.handle("update-global-hotkey", async (event, hotkey) => {
+      try {
+        if (!this.hotkeyManager) {
+          return { success: false, error: "热键管理器未初始化" };
+        }
+
+        if (!this.windowManager || !this.windowManager.mainWindow || this.windowManager.mainWindow.isDestroyed()) {
+          return { success: false, error: "主窗口不可用" };
+        }
+
+        const senderId = this.windowManager.mainWindow.webContents.id;
+        const existingHotkey = this.hotkeyRegisteredSenders.get(senderId);
+
+        if (existingHotkey === hotkey) {
+          return { success: true, alreadyRegistered: true };
+        }
+
+        const registerWithCallback = (hotkeyCombo) => {
+          return this.hotkeyManager.registerHotkey(
+            hotkeyCombo,
+            () => {
+              this.logger.info(`热键 ${hotkeyCombo} 被触发，发送事件到主窗口`);
+              if (this.windowManager && this.windowManager.mainWindow && !this.windowManager.mainWindow.isDestroyed()) {
+                this.windowManager.mainWindow.webContents.send("hotkey-triggered", { hotkey: hotkeyCombo });
+              }
+            },
+            this.getHotkeyOptions(hotkeyCombo)
+          );
+        };
+
+        let previousHotkey = existingHotkey;
+        if (previousHotkey && previousHotkey !== hotkey) {
+          this.logger.info(`主窗口更新热键: ${previousHotkey} -> ${hotkey}`);
+          this.hotkeyManager.unregisterHotkey(previousHotkey);
+          this.hotkeyRegisteredSenders.delete(senderId);
+        }
+
+        const result = registerWithCallback(hotkey);
+        if (result.success) {
+          this.hotkeyRegisteredSenders.set(senderId, hotkey);
+          this.windowManager.mainWindow.webContents.send("hotkey-updated", { hotkey });
+          return result;
+        }
+
+        if (result.error) {
+          this.logger.error(`主窗口热键 ${hotkey} 注册失败: ${result.error}`);
+        } else {
+          this.logger.error(`主窗口热键 ${hotkey} 注册失败`);
+        }
+
+        if (previousHotkey && previousHotkey !== hotkey) {
+          const revertResult = registerWithCallback(previousHotkey);
+          if (revertResult.success) {
+            this.hotkeyRegisteredSenders.set(senderId, previousHotkey);
+            this.logger.warn(`主窗口热键恢复为 ${previousHotkey}`);
+          } else {
+            this.hotkeyRegisteredSenders.delete(senderId);
+            if (revertResult.error) {
+              this.logger.error(`尝试恢复主窗口热键 ${previousHotkey} 失败: ${revertResult.error}`);
+            } else {
+              this.logger.error(`尝试恢复主窗口热键 ${previousHotkey} 失败`);
+            }
+          }
+        }
+
+        return result;
+      } catch (error) {
+        this.logger.error("更新全局热键失败:", error);
+        return { success: false, error: error.message };
+      }
+    });
+
+    ipcMain.handle("get-hotkey-mode", () => {
+      return { success: true, mode: this.hotkeyMode };
+    });
+
+    ipcMain.handle("update-hotkey-mode", async (event, mode) => {
+      try {
+        const normalized = mode === 'hold' ? 'hold' : 'toggle';
+
+        if (normalized === 'hold' && this.hotkeyManager) {
+          this.hotkeyManager.ensureHoldSupport(true);
+        }
+
+        if (normalized === 'hold' && (!this.hotkeyManager || !this.hotkeyManager.isHoldSupported())) {
+          return {
+            success: false,
+            error: '按住快捷键模式当前不可用，请确认系统已授予全局键盘监听权限',
+          };
+        }
+
+        if (this.databaseManager) {
+          this.databaseManager.setSetting('hotkey_mode', normalized);
+        }
+
+        this.hotkeyMode = normalized;
+        this.broadcastToAllWindows('hotkey-mode-updated', { mode: normalized });
+        this.reconfigureMainHotkeyForMode();
+
+        return { success: true, mode: normalized };
+      } catch (error) {
+        this.logger.error('更新热键模式失败:', error);
         return { success: false, error: error.message };
       }
     });
@@ -1248,6 +1470,76 @@ ${text}
   // 清理处理器
   removeAllHandlers() {
     ipcMain.removeAllListeners();
+  }
+
+  broadcastToAllWindows(channel, payload) {
+    if (!this.windowManager) {
+      return;
+    }
+
+    const targets = [
+      this.windowManager.mainWindow,
+      this.windowManager.controlPanelWindow,
+      this.windowManager.historyWindow,
+      this.windowManager.settingsWindow,
+    ];
+
+    for (const target of targets) {
+      if (target && !target.isDestroyed()) {
+        target.webContents.send(channel, payload);
+      }
+    }
+  }
+
+  getHotkeyOptions(hotkeyCombo) {
+    if (this.hotkeyMode !== 'hold' || !this.hotkeyManager || !this.hotkeyManager.isHoldSupported()) {
+      return undefined;
+    }
+
+    return {
+      onRelease: () => {
+        if (this.logger && this.logger.info) {
+          this.logger.info(`热键 ${hotkeyCombo} 已松开，通知主窗口`);
+        }
+        if (this.windowManager && this.windowManager.mainWindow && !this.windowManager.mainWindow.isDestroyed()) {
+          this.windowManager.mainWindow.webContents.send('hotkey-released', { hotkey: hotkeyCombo });
+        }
+      }
+    };
+  }
+
+  reconfigureMainHotkeyForMode() {
+    if (!this.windowManager || !this.windowManager.mainWindow || this.windowManager.mainWindow.isDestroyed()) {
+      return;
+    }
+
+    if (!this.hotkeyManager) {
+      return;
+    }
+
+    const senderId = this.windowManager.mainWindow.webContents.id;
+    const currentHotkey = this.hotkeyRegisteredSenders.get(senderId);
+
+    if (!currentHotkey) {
+      return;
+    }
+
+    const result = this.hotkeyManager.registerHotkey(
+      currentHotkey,
+      () => {
+        if (this.logger && this.logger.info) {
+          this.logger.info(`热键 ${currentHotkey} 被触发，发送事件到主窗口`);
+        }
+        if (this.windowManager && this.windowManager.mainWindow && !this.windowManager.mainWindow.isDestroyed()) {
+          this.windowManager.mainWindow.webContents.send('hotkey-triggered', { hotkey: currentHotkey });
+        }
+      },
+      this.getHotkeyOptions(currentHotkey)
+    );
+
+    if (!result.success && this.logger && this.logger.warn) {
+      this.logger.warn(`重新配置热键 ${currentHotkey} 时出现问题: ${result.error || '未知错误'}`);
+    }
   }
 }
 
