@@ -26,7 +26,7 @@
     "build:linux": "electron-builder --linux",
     "pack": "npm run build:renderer && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --dir",
     "dist": "npm run prepare:python:embedded && npm run build:renderer && electron-builder",
-    "lint": "cd src && eslint .",
+    "lint": "eslint \"src\"",
     "preview": "cd src && vite preview",
     "clean": "node cleanup.js && rm -rf python"
   },
@@ -59,6 +59,7 @@
     "electron": "36.5.0",
     "electron-builder": "^24.6.4",
     "eslint": "^9.25.0",
+    "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^5.2.0",
     "eslint-plugin-react-refresh": "^0.4.19",
     "globals": "^16.0.0",
