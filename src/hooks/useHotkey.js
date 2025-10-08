@@ -7,7 +7,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 export const useHotkey = () => {
   const [hotkey, setHotkey] = useState('CommandOrControl+Shift+Space');
   const [isRegistered, setIsRegistered] = useState(false);
-  const [hotkeyMode, setHotkeyMode] = useState('toggle');
+  const [hotkeyMode, setHotkeyMode] = useState('hold');
   const registeredHotkeyRef = useRef(null); // 跟踪已注册的热键
 
   // 获取当前热键
@@ -38,14 +38,14 @@ export const useHotkey = () => {
         if (window.electronAPI?.getHotkeyMode) {
           const result = await window.electronAPI.getHotkeyMode();
           if (result?.success && result.mode) {
-            setHotkeyMode(result.mode);
+            setHotkeyMode(result.mode === 'toggle' ? 'toggle' : 'hold');
             return;
           }
         }
 
         if (window.electronAPI?.getSetting) {
-          const storedMode = await window.electronAPI.getSetting('hotkey_mode', 'toggle');
-          setHotkeyMode(storedMode === 'hold' ? 'hold' : 'toggle');
+          const storedMode = await window.electronAPI.getSetting('hotkey_mode', 'hold');
+          setHotkeyMode(storedMode === 'toggle' ? 'toggle' : 'hold');
         }
       } catch (error) {
         if (window.electronAPI?.log) {
@@ -87,7 +87,7 @@ export const useHotkey = () => {
 
     const unsubscribe = window.electronAPI.onHotkeyModeUpdated((_, data) => {
       if (data?.mode) {
-        setHotkeyMode(data.mode);
+        setHotkeyMode(data.mode === 'toggle' ? 'toggle' : 'hold');
       }
     });
 

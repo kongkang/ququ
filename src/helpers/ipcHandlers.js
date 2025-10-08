@@ -17,19 +17,28 @@ class IPCHandlers {
     // 跟踪F2热键注册状态
     this.f2RegisteredSenders = new Set();
 
-    this.hotkeyMode = 'toggle';
+    const hotkeyHoldSupported = this.hotkeyManager && typeof this.hotkeyManager.isHoldSupported === 'function'
+      ? this.hotkeyManager.isHoldSupported()
+      : false;
+
+    this.hotkeyMode = hotkeyHoldSupported ? 'hold' : 'toggle';
     try {
       if (this.databaseManager) {
-        const savedMode = this.databaseManager.getSetting('hotkey_mode', 'toggle');
-        if (savedMode === 'hold' && this.hotkeyManager && this.hotkeyManager.isHoldSupported()) {
-          this.hotkeyMode = 'hold';
-        } else if (savedMode === 'hold' && this.logger && this.logger.warn) {
-          this.logger.warn('检测到保存的热键模式为按住，但当前环境不支持，已自动降级为切换模式');
+        const savedMode = this.databaseManager.getSetting('hotkey_mode', hotkeyHoldSupported ? 'hold' : 'toggle');
+
+        if (savedMode === 'toggle') {
+          this.hotkeyMode = 'toggle';
+        } else if (savedMode === 'hold') {
+          if (hotkeyHoldSupported) {
+            this.hotkeyMode = 'hold';
+          } else if (this.logger && this.logger.warn) {
+            this.logger.warn('检测到保存的热键模式为按住，但当前环境不支持，已自动降级为切换模式');
+          }
         }
       }
     } catch (error) {
       if (this.logger && this.logger.warn) {
-        this.logger.warn('读取热键模式失败，使用默认切换模式', error);
+        this.logger.warn('读取热键模式失败，将使用默认热键模式', error);
       }
     }
 
@@ -559,17 +568,30 @@ class IPCHandlers {
 
     ipcMain.handle("update-hotkey-mode", async (event, mode) => {
       try {
-        const normalized = mode === 'hold' ? 'hold' : 'toggle';
+        const normalized = mode === 'toggle' ? 'toggle' : 'hold';
 
-        if (normalized === 'hold' && this.hotkeyManager) {
-          this.hotkeyManager.ensureHoldSupport(true);
-        }
+        if (normalized === 'hold') {
+          if (!this.hotkeyManager) {
+            return {
+              success: false,
+              error: '热键管理器未初始化，无法启用按住模式',
+            };
+          }
 
-        if (normalized === 'hold' && (!this.hotkeyManager || !this.hotkeyManager.isHoldSupported())) {
-          return {
-            success: false,
-            error: '按住快捷键模式当前不可用，请确认系统已授予全局键盘监听权限',
-          };
+          if (!this.hotkeyManager.isHoldSupported()) {
+            this.hotkeyManager.ensureHoldSupport();
+          }
+
+          if (!this.hotkeyManager.isHoldSupported()) {
+            this.hotkeyManager.ensureHoldSupport(true);
+          }
+
+          if (!this.hotkeyManager.isHoldSupported()) {
+            return {
+              success: false,
+              error: '按住快捷键模式当前不可用，请确认系统已授予全局键盘监听权限',
+            };
+          }
         }
 
         if (this.databaseManager) {

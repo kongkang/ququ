@@ -625,7 +625,7 @@ function MainAppContent() {
     if (window.electronAPI.onHotkeyReleased) {
       unsubscribeRelease = window.electronAPI.onHotkeyReleased(() => {
         if (hotkeyMode === 'hold') {
-          toggleRecording('stop');
+          stopRecording({ allowPending: true });
         }
       });
     }
@@ -635,7 +635,7 @@ function MainAppContent() {
       if (typeof unsubscribeToggle === 'function') unsubscribeToggle();
       if (typeof unsubscribeRelease === 'function') unsubscribeRelease();
     };
-  }, [toggleRecording, hotkeyMode]);
+  }, [toggleRecording, stopRecording, hotkeyMode]);
 
   // 同步录音状态到热键管理器
   useEffect(() => {

@@ -27,7 +27,7 @@ const SettingsPage = () => {
   const [isSavingHotkey, setIsSavingHotkey] = useState(false);
   const [pendingHotkey, setPendingHotkey] = useState(null);
   const [systemInfo, setSystemInfo] = useState(null);
-  const [hotkeyMode, setHotkeyMode] = useState('toggle');
+  const [hotkeyMode, setHotkeyMode] = useState('hold');
   const [isSavingHotkeyMode, setIsSavingHotkeyMode] = useState(false);
   const [isCapturingHotkey, setIsCapturingHotkey] = useState(false);
   const [captureDisplay, setCaptureDisplay] = useState('');
@@ -154,14 +154,14 @@ const SettingsPage = () => {
       if (window.electronAPI?.getHotkeyMode) {
         const result = await window.electronAPI.getHotkeyMode();
         if (result?.success && result.mode) {
-          setHotkeyMode(result.mode === 'hold' ? 'hold' : 'toggle');
+          setHotkeyMode(result.mode === 'toggle' ? 'toggle' : 'hold');
           return;
         }
       }
 
       if (window.electronAPI?.getSetting) {
-        const storedMode = await window.electronAPI.getSetting('hotkey_mode', 'toggle');
-        setHotkeyMode(storedMode === 'hold' ? 'hold' : 'toggle');
+        const storedMode = await window.electronAPI.getSetting('hotkey_mode', 'hold');
+        setHotkeyMode(storedMode === 'toggle' ? 'toggle' : 'hold');
       }
     } catch (error) {
       console.error('加载热键模式失败:', error);
@@ -189,7 +189,7 @@ const SettingsPage = () => {
 
     const unsubscribe = window.electronAPI.onHotkeyModeUpdated((_, data) => {
       if (data?.mode) {
-        setHotkeyMode(data.mode === 'hold' ? 'hold' : 'toggle');
+        setHotkeyMode(data.mode === 'toggle' ? 'toggle' : 'hold');
       }
     });
 
@@ -860,14 +860,14 @@ const SettingsPage = () => {
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                     {[
                       {
-                        value: 'toggle',
-                        title: '按下开始 / 再按结束',
-                        hint: '适合较长时间的录音'
-                      },
-                      {
                         value: 'hold',
                         title: '按住开始 / 松开结束',
                         hint: '适合即时对话或按住说话'
+                      },
+                      {
+                        value: 'toggle',
+                        title: '按下开始 / 再按结束',
+                        hint: '适合较长时间的录音'
                       }
                     ].map((option) => {
                       const isActive = hotkeyMode === option.value;

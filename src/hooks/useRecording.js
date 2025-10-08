@@ -15,12 +15,46 @@ export const useRecording = () => {
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const streamRef = useRef(null);
+  const pendingStopRef = useRef(false);
+  const stopRecordingRef = useRef(() => {});
   
   // 添加防重复处理机制
   const processingRef = useRef({ isProcessingAudio: false, lastProcessTime: 0 });
 
   // 使用模型状态Hook
   const modelStatus = useModelStatus();
+
+  // 停止录音（支持延迟处理）
+  const stopRecording = useCallback((options = {}) => {
+    const { allowPending = false, force = false } = options;
+    const recorder = mediaRecorderRef.current;
+
+    if (!recorder || recorder.state === 'inactive') {
+      if (allowPending) {
+        pendingStopRef.current = true;
+      }
+      return;
+    }
+
+    pendingStopRef.current = false;
+
+    try {
+      if (force || recorder.state !== 'inactive') {
+        recorder.stop();
+      }
+    } catch (err) {
+      setError(`停止录音失败: ${err.message || err}`);
+    }
+
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    stopRecordingRef.current = stopRecording;
+  }, [stopRecording]);
 
   // 开始录音
   const startRecording = useCallback(async () => {
@@ -72,8 +106,12 @@ export const useRecording = () => {
       };
 
       mediaRecorder.onstop = async () => {
+        pendingStopRef.current = false;
         setIsRecording(false);
         setIsProcessing(true);
+        if (mediaRecorderRef.current === mediaRecorder) {
+          mediaRecorderRef.current = null;
+        }
 
         try {
           // 创建音频Blob
@@ -96,30 +134,30 @@ export const useRecording = () => {
         setError(`录音错误: ${event.error?.message || '未知错误'}`);
         setIsRecording(false);
         setIsProcessing(false);
+        pendingStopRef.current = false;
+        if (streamRef.current) {
+          streamRef.current.getTracks().forEach(track => track.stop());
+          streamRef.current = null;
+        }
+        if (mediaRecorderRef.current === mediaRecorder) {
+          mediaRecorderRef.current = null;
+        }
       };
 
       // 开始录音
       mediaRecorder.start(1000); // 每秒收集一次数据
       setIsRecording(true);
 
+      if (pendingStopRef.current) {
+        stopRecordingRef.current({ force: true });
+      }
+
     } catch (err) {
       setError(`无法开始录音: ${err.message}`);
       setIsRecording(false);
+      pendingStopRef.current = false;
     }
   }, [modelStatus.isReady, modelStatus.isLoading, modelStatus.error]);
-
-  // 停止录音
-  const stopRecording = useCallback(() => {
-    if (mediaRecorderRef.current && isRecording) {
-      mediaRecorderRef.current.stop();
-
-      // 停止所有音频轨道
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
-        streamRef.current = null;
-      }
-    }
-  }, [isRecording]);
 
   // 处理音频
   const processAudio = useCallback(async (audioBlob) => {
