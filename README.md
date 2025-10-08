@@ -16,7 +16,7 @@
 <!-- 徽章 (Badges) - 您可以后续替换为动态徽章服务 (如 shields.io) -->
 <img src="https://img.shields.io/badge/license-Apache_2.0-blue.svg" alt="License">
 <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey" alt="Platform">
-<img src="https://img.shields.io/badge/release-v1.0.0-brightgreen" alt="Release">
+<img src="https://img.shields.io/badge/release-v1.0.1-brightgreen" alt="Release">
 <img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg" alt="PRs Welcome">
 
 </div>

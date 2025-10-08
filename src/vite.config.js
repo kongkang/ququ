@@ -86,7 +86,7 @@ export default defineConfig({
   
   // 定义全局常量
   define: {
-    __APP_VERSION__: JSON.stringify(process.env.npm_package_version || '1.0.0'),
+    __APP_VERSION__: JSON.stringify(process.env.npm_package_version || '1.0.1'),
     __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
     __DEV__: process.env.NODE_ENV === 'development'
   },
